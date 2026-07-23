@@ -1,4 +1,4 @@
-const CACHE_NAME = "vault-cache-v1";
+const CACHE_NAME = "vault-cache-v2";
 
 self.addEventListener("install", () => {
   self.skipWaiting();
@@ -15,24 +15,42 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
-// Cache-first, falling back to the network. Whatever gets fetched
-// successfully is stored so the next visit works without internet.
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
 
-  event.respondWith(
-    caches.match(event.request).then((cached) => {
-      const networkFetch = fetch(event.request)
+  const isNavigation =
+    event.request.mode === "navigate" ||
+    (event.request.headers.get("accept") || "").includes("text/html");
+
+  if (isNavigation) {
+    // Page itself: always try the network first so you get the latest
+    // version when you have internet. Only fall back to the cached
+    // copy when you're actually offline.
+    event.respondWith(
+      fetch(event.request)
         .then((response) => {
-          if (response && response.ok) {
-            const copy = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
-          }
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
           return response;
         })
-        .catch(() => cached);
+        .catch(() => caches.match(event.request))
+    );
+    return;
+  }
 
-      return cached || networkFetch;
+  // Everything else (hashed JS/CSS/images): cache-first is safe, since
+  // their filenames change whenever their content changes.
+  event.respondWith(
+    caches.match(event.request).then((cached) => {
+      if (cached) return cached;
+      return fetch(event.request).then((response) => {
+        if (response && response.ok) {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+        }
+        return response;
+      });
     })
   );
 });
+
